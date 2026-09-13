@@ -71,9 +71,23 @@ var hardMarkers = []string{
 var sessionDeadMarkers = []string{"Offline user session not found", "12153"}
 
 // Classify 按 HTTP 状态码 + body 判定错误类别。
+//
+// 优先级：402（明确的付费要求）> 429（明确的限流状态码）> body 关键词 > 其余状态码。
+//
+// 429 必须排在 hardMarkers 扫描之前：hardMarkers 里的 "quota exceeded" 是限流响应的
+// 高频措辞，若让关键词先行，一个 429 会被误判成 ErrHardCredit 并硬冷却到次日 04:00
+// （白扔一个号约 12 小时，且余额其实充足）。
+//
+// 代价与兜底：真正的余额耗尽若不走 402，仍会被下面的 hardMarkers 捕获（非 429 状态码
+// 路径完全不受影响）；若上游确实用 429 表达余额耗尽，则由熔断器升级兜底——连续失败达
+// breakerThreshold 即熔断 30m 起、指数退避、6h 封顶，不会无限重试。
 func Classify(status int, body string) ErrKind {
 	if status == http.StatusPaymentRequired {
 		return ErrHardCredit
+	}
+	// 429 语义明确（too many requests，属暂时性错误），优先于模糊关键词匹配。
+	if status == http.StatusTooManyRequests {
+		return ErrSoftRate
 	}
 	lower := strings.ToLower(body)
 	for _, m := range hardMarkers {
@@ -85,9 +99,6 @@ func Classify(status int, body string) ErrKind {
 		if strings.Contains(body, m) {
 			return ErrSessionDead
 		}
-	}
-	if status == http.StatusTooManyRequests {
-		return ErrSoftRate
 	}
 	if status == http.StatusNotFound {
 		return ErrNotFound

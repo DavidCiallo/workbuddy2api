@@ -27,6 +27,11 @@ func TestClassify(t *testing.T) {
 		{200, `{"code":10001,"msg":"积分不足，请充值"}`, ErrHardCredit},
 		{400, `{"code":1,"msg":"额度用尽"}`, ErrHardCredit},
 		{429, ``, ErrSoftRate},
+		// 429 优先于 hardMarkers 扫描：限流响应里常带 "quota exceeded" / 余额配额措辞，
+		// 不得被误判为 ErrHardCredit（否则会硬冷却到次日 04:00，而余额其实充足）。
+		{429, `{"code":1,"msg":"quota exceeded"}`, ErrSoftRate},
+		{429, `{"code":1,"msg":"额度不足，请稍后重试"}`, ErrSoftRate},
+		{429, `insufficient credit`, ErrSoftRate},
 		{401, `Offline user session not found`, ErrSessionDead},
 		{401, `{"code":12153,"msg":"Offline user session not found"}`, ErrSessionDead},
 		{401, `{"code":9999,"msg":"bad token"}`, ErrClient},
