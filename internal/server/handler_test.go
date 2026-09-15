@@ -359,6 +359,35 @@ func TestChatAllUnavailableReturns503(t *testing.T) {
 	}
 }
 
+// TestChatAllInFlightFullReportsCapacityNotCooling 回归：账号全部 healthy 但占满在途名额时，
+// 503 的文案必须归因为"容量耗尽"，而不是误导性的 "(cooling/disabled)"。
+// 两者走同一条 Pick 返回 nil 的路径，此前无法区分 —— 排障时容易把容量不足当成冷却异常。
+func TestChatAllInFlightFullReportsCapacityNotCooling(t *testing.T) {
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		t.Errorf("upstream must not be called when every account is in-flight full (auth=%s)", authz)
+		return 200, sseOK, true
+	})
+	p := testPoolWith(
+		&auth.Auth{UID: "a", AccessToken: "at-a", ExpiresAt: 9999999999},
+		&auth.Auth{UID: "b", AccessToken: "at-b", ExpiresAt: 9999999999},
+	)
+	p.SetMaxInFlight(1)
+	p.Acquire("a")
+	p.Acquire("b")
+	defer func() { p.Release("a"); p.Release("b") }()
+
+	h := NewHandler(Config{Pool: p, Upstream: up})
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 503 {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "max in-flight capacity") {
+		t.Errorf("503 must be attributed to capacity exhaustion, got: %s", body)
+	}
+}
+
 func TestChatSessionDeadDisables(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		return 401, `{"code":12153,"msg":"Offline user session not found"}`, false

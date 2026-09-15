@@ -4,6 +4,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -274,10 +275,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		st.uid = acct.UID
-		tried[acct.UID] = true
 
 		// 占用在途名额：Pick 已跳过满额账号，此处 CAS 兜底并发抢名额的竞态。
 		if !h.cfg.Pool.Acquire(acct.UID) {
+			// 抢名额失败 ≠ 该号不可用，只是它最后一个名额刚被并发请求抢走。
+			// 因此**不能**记入 tried：否则本次请求后续轮换会永远跳过这个号，
+			// 即使它下一秒就空出名额，也会被判成"无可用账号"→ 假性 503
+			// （典型症状：503 之后 1 秒内下一个请求就正常）。
+			// 不记 tried 也不会重复选中它：Pick 自身会跳过满载账号。
+			//
 			// 若被抢的正是粘性号，立即解绑并回落普通轮换，避免下一轮仍撞同一个
 			// 满载粘性号再浪费一次 PickByUID 往返（语义与 fail()/PickByUID-nil 的解绑一致）。
 			if stickyUID != "" && acct.UID == stickyUID {
@@ -287,6 +293,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			continue // 最后一个名额被并发抢走 → 换号
 		}
 		heldUID = acct.UID
+		tried[acct.UID] = true // 真正占到位之后才拉黑（理由见上）
 
 		// token 临近过期 → 先 refresh（失败冷却换号）
 		if acct.NeedsRefresh(h.cfg.RefreshSkew) {
@@ -353,7 +360,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		st.toks = completionTokens(resp)
 		return
 	}
+	// 归因：Pick 返回 nil 有两种完全不同的原因——「全冷却/禁用」与「healthy 但全部占满
+	// 在途名额」。两者走同一条 nil 路径，若共用一句 "cooling/disabled" 文案，排障时会把
+	// 容量不足误当成冷却异常（/status 的 in_flight_full 才是判据）。
+	// 只修文案、不改 code，避免影响已按 no_healthy_account 做重试的客户端。
 	msg := "all accounts unavailable (cooling/disabled)"
+	if total, healthy, _, _, inFlightFull := h.cfg.Pool.CountsDetailed(); healthy > 0 && inFlightFull == healthy {
+		msg = fmt.Sprintf("all %d healthy account(s) of %d are at max in-flight capacity (capacity exhausted, not cooling/disabled)", inFlightFull, total)
+	}
 	if lastErr != nil {
 		msg += ": " + lastErr.Error()
 	}
