@@ -1,5 +1,16 @@
 auths/
 data/
+
+# 以下三项目 .gitignore 已排除，但 .dockerignore 是独立的一套，漏了就会被打进构建上下文：
+#   backups/ 里是含 token 的凭证备份；根目录那几个是本地编译出的二进制。
+# 二进制模式**必须带前导斜杠**（root 锚定）—— 裸写 login/credit 会连 cmd/login、cmd/credit 一起排掉。
+backups/
+/login
+/credit
+/wb2api
+/signin_bin
+.workbuddy/
+
 *.tmp
 .git/
 .gitignore
