@@ -44,6 +44,29 @@ func TestEnvOverride(t *testing.T) {
 	}
 }
 
+// TestMaxInFlightEnvOverride 覆盖 pool.max_in_flight 的 env 通道，并锁住
+// "0 = 不限" 这个语义：normalize() 不得把 0 回落成默认 3
+// （否则「不限」会被悄悄改成最严的 3，与 pool 侧 SetMaxInFlight 的 `n >= 0` 判定矛盾）。
+func TestMaxInFlightEnvOverride(t *testing.T) {
+	t.Setenv("WB2A_MAX_IN_FLIGHT", "6")
+	c, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Pool.MaxInFlight != 6 {
+		t.Errorf("MaxInFlight=%d want 6", c.Pool.MaxInFlight)
+	}
+
+	t.Setenv("WB2A_MAX_IN_FLIGHT", "0")
+	c, err = Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Pool.MaxInFlight != 0 {
+		t.Errorf("MaxInFlight=%d want 0 (0 = 不限，不得被 normalize 回落为默认)", c.Pool.MaxInFlight)
+	}
+}
+
 func TestBadDuration(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")

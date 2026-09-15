@@ -154,6 +154,15 @@ func applyEnv(c *Config) {
 			c.Features.SanitizeBlacklistFingerprints = b
 		}
 	}
+	// pool 调优。在途上限原先只能改 config.json（以 :ro 挂进容器，改完还得重启），
+	// 支持 env 后可直接写在 compose 的 environment 里，调整留痕、也不必碰挂载文件。
+	// 注意：0 是**有效值**，语义为「不限」，与上面那些 "0 视为未设置走默认" 的项不同；
+	// normalize() 有意不碰 MaxInFlight，别在这里或那里加 0→3 的回落。
+	if v := os.Getenv("WB2A_MAX_IN_FLIGHT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Pool.MaxInFlight = n
+		}
+	}
 }
 
 func (c *Config) normalize() error {
