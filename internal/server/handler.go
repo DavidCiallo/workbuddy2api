@@ -326,6 +326,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if status >= 400 {
 			st.status = status
 			kind := upstream.Classify(status, string(respBody))
+			if status == http.StatusBadRequest {
+				// 400 多半是出站请求体本身有问题（上游常回 code=11101
+				// "Unmarshal chat params failed with error: unexpected EOF"）。
+				// 把请求体的结构与字节数打出来，便于确认是否被截断。
+				logRequestBodyShape("upstream 400", body)
+			}
 			lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody)}
 			h.applyErrorPolicy(acct.UID, kind)
 			fail(acct.UID)
